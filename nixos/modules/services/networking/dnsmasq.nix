@@ -56,6 +56,15 @@ in
         '';
       };
 
+      useResolvConfUpstreams = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether dnsmasq should include as upstream servers the DNS servers
+          provided by resolvconf (which are typically determined via DHCP).
+        '';
+      };
+
       alwaysKeepRunning = lib.mkOption {
         type = lib.types.bool;
         default = false;
@@ -87,8 +96,8 @@ in
 
               {
                 dhcp-leasefile = "${stateDir}/dnsmasq.leases";
-                conf-file = optional cfg.resolveLocalQueries "/etc/dnsmasq-conf.conf";
-                resolv-file = optional cfg.resolveLocalQueries "/etc/dnsmasq-resolv.conf";
+                conf-file = optional cfg.useResolvConfUpstreams "/etc/dnsmasq-conf.conf";
+                resolv-file = optional cfg.useResolvConfUpstreams "/etc/dnsmasq-resolv.conf";
               }
         '';
         example = lib.literalExpression ''
@@ -110,8 +119,8 @@ in
 
     services.dnsmasq.settings = {
       dhcp-leasefile = lib.mkDefault "${stateDir}/dnsmasq.leases";
-      conf-file = lib.mkDefault (lib.optional cfg.resolveLocalQueries "/etc/dnsmasq-conf.conf");
-      resolv-file = lib.mkDefault (lib.optional cfg.resolveLocalQueries "/etc/dnsmasq-resolv.conf");
+      conf-file = lib.mkDefault (lib.optional cfg.useResolvConfUpstreams "/etc/dnsmasq-conf.conf");
+      resolv-file = lib.mkDefault (lib.optional cfg.useResolvConfUpstreams "/etc/dnsmasq-resolv.conf");
     };
 
     networking.nameservers =
@@ -126,15 +135,15 @@ in
     };
     users.groups.dnsmasq = {};
 
-    networking.resolvconf = lib.mkIf cfg.resolveLocalQueries {
-      useLocalResolver = lib.mkDefault true;
+    networking.resolvconf = {
+      useLocalResolver = lib.mkIf cfg.resolveLocalQueries (lib.mkDefault true);
 
-      extraConfig = ''
+      extraConfig = lib.mkIf cfg.useResolvConfUpstreams ''
         dnsmasq_conf=/etc/dnsmasq-conf.conf
         dnsmasq_resolv=/etc/dnsmasq-resolv.conf
       '';
 
-      subscriberFiles = [
+      subscriberFiles = lib.mkIf cfg.useResolvConfUpstreams [
         "/etc/dnsmasq-conf.conf"
         "/etc/dnsmasq-resolv.conf"
       ];
@@ -149,7 +158,7 @@ in
           mkdir -m 755 -p ${stateDir}
           touch ${stateDir}/dnsmasq.leases
           chown -R dnsmasq ${stateDir}
-          touch /etc/dnsmasq-{conf,resolv}.conf
+          ${lib.optionalString cfg.useResolvConfUpstreams "touch /etc/dnsmasq-{conf,resolv}.conf"}
           dnsmasq --test
         '';
         serviceConfig = {
