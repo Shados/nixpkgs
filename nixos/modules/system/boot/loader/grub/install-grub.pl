@@ -229,7 +229,7 @@ sub GrubFs {
 }
 my $grubBoot = GrubFs($bootPath);
 my $grubStore;
-if ($copyKernels == 0) {
+unless ($copyKernels) {
     $grubStore = GrubFs($storePath);
 }
 my $extraInitrdPath;
@@ -255,7 +255,7 @@ if ($grubVersion == 1) {
 }
 
 else {
-    if ($copyKernels == 0) {
+    unless ($copyKernels) {
         $conf .= "
             " . $grubStore->search;
     }
@@ -339,66 +339,142 @@ $conf .= "\n";
 my %copied;
 mkpath("$bootPath/kernels", 0, 0755) if $copyKernels;
 
+my $efiTarget = getEfiTarget();
+
+sub prefixGrubDevPath {
+    my ($subpath) = @_;
+    return ($grubBoot->path eq "/" ? "/" : $grubBoot->path) . $subpath;
+}
+
+sub atomicCopy {
+    my ($src, $dst) = @_;
+    # Don't copy the file if $dst already exists.  This means that we
+    # have to create $dst atomically to prevent partially copied
+    # kernels or initrd if this script is ever interrupted.
+    if (! -e $dst) {
+        my $tmp = "$dst.tmp";
+        copy $src, $tmp or die "cannot copy $src to $tmp\n";
+        rename $tmp, $dst or die "cannot rename $tmp to $dst\n";
+    }
+}
+
+sub copyStoreFileToBootLocation {
+    my ($storePath, $subpath, $dstName) = @_;
+    $storePath =~ /\/nix\/store\/(.*)/ or die;
+    my $dst = "$bootPath/$subpath/$dstName";
+    atomicCopy($storePath, $dst);
+    return prefixGrubDevPath("$subpath/$dstName");
+}
+
 sub copyToKernelsDir {
     my ($path) = @_;
     return $grubStore->path . substr($path, length("/nix/store")) unless $copyKernels;
     $path =~ /\/nix\/store\/(.*)/ or die;
     my $name = $1; $name =~ s/\//-/g;
     my $dst = "$bootPath/kernels/$name";
-    # Don't copy the file if $dst already exists.  This means that we
-    # have to create $dst atomically to prevent partially copied
-    # kernels or initrd if this script is ever interrupted.
-    if (! -e $dst) {
-        my $tmp = "$dst.tmp";
-        copy $path, $tmp or die "cannot copy $path to $tmp\n";
-        rename $tmp, $dst or die "cannot rename $tmp to $dst\n";
-    }
+    atomicCopy($path, $dst);
     $copied{$dst} = 1;
-    return ($grubBoot->path eq "/" ? "" : $grubBoot->path) . "/kernels/$name";
+    return prefixGrubDevPath("kernels/$name");
+}
+
+sub createXenEfiDirectory {
+    my ($path) = @_;
+
+    # Construct directory name from the profile/generation hash
+    my $systemPath = Cwd::abs_path($path); ($systemPath) = $systemPath =~ m/\/nix\/store\/(.*)/g; $systemPath =~ s/\//-/g;
+    my $systemHash = (split /-/, $systemPath)[0];
+    my $xenDirSubpath = "kernels/$systemHash-xenEfi";
+    my $xenDir = "$bootPath/$xenDirSubpath";
+
+    # Ensure the directory exists
+    if (! -e $xenDir) {
+        mkdir $xenDir or die "cannot create Xen EFI directory $xenDir\n";
+    }
+    $copied{$xenDir} = 1;
+
+    return $xenDirSubpath;
 }
 
 sub addEntry {
     my ($name, $path) = @_;
     return unless -e "$path/kernel" && -e "$path/initrd";
 
-    my $kernel = copyToKernelsDir(Cwd::abs_path("$path/kernel"));
-    my $initrd = copyToKernelsDir(Cwd::abs_path("$path/initrd"));
-    if ($extraInitrd) {
-        $initrd .= " " .$extraInitrdPath->path;
-    }
-    my $xen = -e "$path/xen.gz" ? copyToKernelsDir(Cwd::abs_path("$path/xen.gz")) : undef;
-
-    # FIXME: $confName
-
     my $kernelParams =
         "systemConfig=" . Cwd::abs_path($path) . " " .
         "init=" . Cwd::abs_path("$path/init") . " " .
         readFile("$path/kernel-params");
-    my $xenParams = $xen && -e "$path/xen-params" ? readFile("$path/xen-params") : "";
 
+    my $entry = undef;
+    unless (-e "$path/xen.gz" || -e "$path/xen.efi") {
+        # Construct the grub commands used to boot to Linux directly
+        my $kernel = copyToKernelsDir(Cwd::abs_path("$path/kernel"));
+        my $initrd = copyToKernelsDir(Cwd::abs_path("$path/initrd"));
+
+        $entry .= "  " . ($grubVersion == 1 ? "kernel" : "linux") . " $kernel $kernelParams\n";
+        $entry .= "  initrd $initrd\n";
+    } else {
+        # Construct the grub commands used to boot to Linux under Xen
+        my $xenParams = -e "$path/xen-params" ? readFile("$path/xen-params") : "";
+
+        if (($efiTarget eq "only" || $efiTarget eq "both") && -e "$path/xen.efi" && -e "$path/xen.gz") {
+            unless ($copyKernels) {
+                die "config.boot.loader.grub.copyKernels must be true in order to make use of Xen under EFI";
+            }
+
+            # Create a unique boot subdirectory to hold the Xen EFI binary,
+            # configuration file, kernel, and initrd
+            my $xenDirSubpath = createXenEfiDirectory($path);
+
+            # Copy xen.efi, xen.cfg, the kernel, and the initrd into place, with the correct names
+            my $xenEfi = copyStoreFileToBootLocation(Cwd::abs_path("$path/xen.efi"), $xenDirSubpath, "xen.efi");
+            my $xenCfg = copyStoreFileToBootLocation(Cwd::abs_path("$path/xen.cfg"), $xenDirSubpath, "xen.cfg");
+            my $kernel = copyStoreFileToBootLocation(Cwd::abs_path("$path/kernel"), $xenDirSubpath, "kernel");
+            my $initrd = copyStoreFileToBootLocation(Cwd::abs_path("$path/initrd"), $xenDirSubpath, "initrd");
+
+            if ($efiTarget eq "only") {
+                # EFI-only Xen booting
+                $entry .= "  chainloader $xenEfi\n";
+            } else {
+                # BIOS + EFI Xen booting
+                my $xen = copyStoreFileToBootLocation(Cwd::abs_path("$path/xen.gz"), $xenDirSubpath, "xen.gz");
+
+                $entry .= "  if [ \"\${grub_platform}\" = \"efi\" ]; then\n";
+                $entry .= "    chainloader $xenEfi\n";
+                $entry .= "  else\n";
+                $entry .= "    multiboot $xen $xenParams\n";
+                $entry .= "    module $kernel $kernelParams\n";
+                $entry .= "    module $initrd\n";
+                $entry .= "  fi\n";
+            }
+        } elsif (-e "$path/xen.gz") {
+            # BIOS-only Xen booting
+            my $xen = copyToKernelsDir(Cwd::abs_path("$path/xen.gz"));
+            my $kernel = copyToKernelsDir(Cwd::abs_path("$path/kernel"));
+            my $initrd = copyToKernelsDir(Cwd::abs_path("$path/initrd"));
+            $entry .= "  " . ($grubVersion == 1 ? "kernel" : "multiboot") . " $xen $xenParams\n";
+            $entry .= "  module $kernel $kernelParams\n";
+            $entry .= "  module $initrd\n";
+        }
+    }
+    # Build the full menu entry
     if ($grubVersion == 1) {
         $conf .= "title $name\n";
         $conf .= "  $extraPerEntryConfig\n" if $extraPerEntryConfig;
-        $conf .= "  kernel $xen $xenParams\n" if $xen;
-        $conf .= "  " . ($xen ? "module" : "kernel") . " $kernel $kernelParams\n";
-        $conf .= "  " . ($xen ? "module" : "initrd") . " $initrd\n\n";
+        $conf .= $entry . "\n";
     } else {
         $conf .= "menuentry \"$name\" {\n";
         $conf .= $grubBoot->search . "\n";
-        if ($copyKernels == 0) {
+        unless ($copyKernels) {
             $conf .= $grubStore->search . "\n";
         }
         if ($extraInitrd) {
             $conf .= $extraInitrdPath->search . "\n";
         }
         $conf .= "  $extraPerEntryConfig\n" if $extraPerEntryConfig;
-        $conf .= "  multiboot $xen $xenParams\n" if $xen;
-        $conf .= "  " . ($xen ? "module" : "linux") . " $kernel $kernelParams\n";
-        $conf .= "  " . ($xen ? "module" : "initrd") . " $initrd\n";
+        $conf .= $entry;
         $conf .= "}\n\n";
     }
 }
-
 
 # Add default entries.
 $conf .= "$extraEntries\n" if $extraEntriesBeforeNixOS;
@@ -516,8 +592,6 @@ sub getEfiTarget {
     }
 }
 
-my $efiTarget = getEfiTarget();
-
 # Append entries detected by os-prober
 if (get("useOSProber") eq "true") {
     my $targetpackage = ($efiTarget eq "no") ? $grub : $grubEfi;
@@ -531,8 +605,13 @@ rename $tmpFile, $confFile or die "cannot rename $tmpFile to $confFile\n";
 # Remove obsolete files from $bootPath/kernels.
 foreach my $fn (glob "$bootPath/kernels/*") {
     next if defined $copied{$fn};
-    print STDERR "removing obsolete file $fn\n";
-    unlink $fn;
+    if (-d $fn) {
+        print STDERR "removing obsolete folder $fn\n";
+        rmtree($fn);
+    } else {
+        print STDERR "removing obsolete file $fn\n";
+        unlink $fn;
+    }
 }
 
 
