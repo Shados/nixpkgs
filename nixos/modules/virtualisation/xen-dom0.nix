@@ -153,9 +153,6 @@ in
       { assertion = pkgs.stdenv.isx86_64;
         message = "Xen currently not supported on ${pkgs.stdenv.hostPlatform.system}";
       }
-      { assertion = config.boot.loader.systemd-boot.enable;
-        message = "Booting Xen using systemd-boot is currently unsupported";
-      }
     ];
 
     virtualisation.xen.package = mkDefault pkgs.xen;
@@ -198,7 +195,8 @@ in
 
     system.extraSystemBuilderCmds = let
       efi = (config.boot.loader.grub.enable &&
-            config.boot.loader.grub.efiSupport == true);
+            config.boot.loader.grub.efiSupport == true) ||
+            config.boot.loader.systemd-boot.enable;
     in optionalString efi ''
       ln -s ${cfg.package}/boot/efi/nixos/xen*.efi $out/xen.efi
       cat << EOF > $out/xen.cfg
