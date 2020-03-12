@@ -10,6 +10,7 @@ config:
 
 # Xen Optional
 , ocamlPackages
+, withStubdom ? true
 
 # Scripts
 , coreutils, gawk, gnused, gnugrep, diffutils, multipath-tools
@@ -89,31 +90,6 @@ stdenv.mkDerivation (rec {
 
   prePatch = ''
     ### Generic fixes
-
-    # Xen's stubdoms, tools and firmwares need various sources that
-    # are usually fetched at build time using wget and git. We can't
-    # have that, so we prefetch them in nix-expression and setup
-    # fake wget and git for debugging purposes.
-
-    mkdir fake-bin
-
-    # Fake git: just print what it wants and die
-    cat > fake-bin/wget << EOF
-    #!${stdenv.shell} -e
-    echo ===== FAKE WGET: Not fetching \$*
-    [ -e \$3 ]
-    EOF
-
-    # Fake git: just print what it wants and die
-    cat > fake-bin/git << EOF
-    #!${stdenv.shell}
-    echo ===== FAKE GIT: Not cloning \$*
-    [ -e \$3 ]
-    EOF
-
-    chmod +x fake-bin/*
-    export PATH=$PATH:$PWD/fake-bin
-
     # Remove in-tree qemu stuff in case we build from a tar-ball
     rm -rf tools/qemu-xen tools/qemu-xen-traditional
 
@@ -123,6 +99,29 @@ stdenv.mkDerivation (rec {
     find . -type f | xargs sed -i 's@/usr/bin/\(python\|perl\)@/usr/bin/env \1@g'
     find . -type f -not -path "./tools/hotplug/Linux/xendomains.in" \
       | xargs sed -i 's@/bin/bash@${stdenv.shell}@g'
+
+    # Xen's stubdoms, tools and firmwares need various sources that
+    # are usually fetched at build time using wget and git. We can't
+    # have that, so we prefetch them in nix-expression and setup
+    # fake wget and git for debugging purposes. These have to be created
+    # *after* the above shebang patching.
+
+    mkdir fake-bin
+    # Fake wget: just print what it wants and die, if missing
+    cat > fake-bin/wget << EOF
+    #!${stdenv.shell} -e
+    echo ===== FAKE WGET: Not fetching \$* in $PWD
+    [ -e \$3 ]
+    EOF
+    # Fake git: just print what it wants and die, if missing
+    cat > fake-bin/git << EOF
+    #!${stdenv.shell}
+    echo ===== FAKE GIT: Not cloning \$* in $PWD
+    [ -e \$3 ]
+    EOF
+
+    chmod +x fake-bin/*
+    export PATH=$PATH:$PWD/fake-bin
 
     # Get prefetched stuff
     ${withXenfiles (name: x: ''
@@ -209,7 +208,7 @@ stdenv.mkDerivation (rec {
   makeFlags = [ "PREFIX=$(out) CONFIG_DIR=/etc" "XEN_SCRIPT_DIR=/etc/xen/scripts" ]
            ++ (config.makeFlags or []);
 
-  buildFlags = [ "xen" "tools" ];
+  buildFlags = [ "xen" "tools" ] ++ optional withStubdom "stubdom";
 
   postBuild = ''
     make -C docs man-pages

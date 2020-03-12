@@ -7,6 +7,7 @@
 , withInternalOVMF ? false # FIXME: tricky to build
 , withOVMF ? false, OVMF
 , withLibHVM ? true
+, withStubdom ? true
 
 # qemu
 , udev, pciutils, xorg, SDL, pixman, acl, glusterfs, spice-protocol, usbredir
@@ -133,6 +134,67 @@ callPackage (import ./generic.nix (rec {
           from the host system for use with the HVM guest firmware
           pass-through feature in Xen'';
         license = licenses.bsd2;
+      };
+    };
+  } // optionalAttrs withStubdom {
+    "../stubdom/newlib-1.16.0.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/newlib-1.16.0.tar.gz";
+        sha256 = "01rxk9js833mwadq92jx0flvk9jyjrnwrq93j39c2j2wjsa66hnv";
+      };
+    };
+    "../stubdom/zlib-1.2.3.tar.gz" = {
+      src = stdenv.mkDerivation {
+        name = "zlib-patched.tar.gz";
+        patches = [
+          ./0006-zlib-link.patch
+        ];
+        src = fetchurl {
+          url = "https://xenbits.xen.org/xen-extfiles/zlib-1.2.3.tar.gz";
+          sha256 = "0pmh8kifb6sfkqfxc23wqp3f2wzk69sl80yz7w8p8cd4cz8cg58p";
+        };
+        configurePhase = ":";
+        buildPhase = ":";
+        installPhase = ''
+          cd ..
+          tar cvzf $out zlib-1.2.3
+        '';
+      };
+    };
+    "../stubdom/polarssl-1.1.4-gpl.tgz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/polarssl-1.1.4-gpl.tgz";
+        sha256 = "1dl4fprpwagv9akwqpb62qwqvh24i50znadxwvd2kfnhl02gsa9d";
+      };
+    };
+    "../stubdom/lwip-1.3.0.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/lwip-1.3.0.tar.gz";
+        sha256 = "13wlr85s1hnvia6a698qpryyy12lvmqw0a05xmjnd0h71ralsbkp";
+      };
+    };
+    "../stubdom/grub-0.97.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/grub-0.97.tar.gz";
+        sha256 = "02r6b52r0nsp6ryqfiqchnl7r1d9smm80sqx24494gmx5p8ia7af";
+      };
+    };
+    "../stubdom/pciutils-2.2.9.tar.bz2" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/pciutils-2.2.9.tar.bz2";
+        sha256 = "092v4q478i1gc7f3s2wz6p4xlf1wb4gs5shbkn21vnnmzcffc2pn";
+      };
+    };
+    "../stubdom/tpm_emulator-0.7.4.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/tpm_emulator-0.7.4.tar.gz";
+        sha256 = "0nd4vs48j0zfzv1g5jymakxbjqf9ss6b2jph3b64356xhc6ylj2f";
+      };
+    };
+    "../stubdom/gmp-4.3.2.tar.bz2" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/gmp-4.3.2.tar.bz2";
+        sha256 = "0x8prpqi9amfcmi7r4zrza609ai9529pjaq0h4aw51i867064qck";
       };
     };
   };
