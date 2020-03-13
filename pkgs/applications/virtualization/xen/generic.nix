@@ -15,7 +15,7 @@ config:
 # Scripts
 , coreutils, gawk, gnused, gnugrep, diffutils, multipath-tools
 , iproute, inetutils, iptables, bridge-utils, openvswitch, nbd, drbd
-, lvm2, utillinux, procps, systemd
+, utillinux, procps, systemd
 
 # Documentation
 # python2Packages.markdown
@@ -134,17 +134,11 @@ stdenv.mkDerivation (rec {
   patches = [
     ./0000-fix-ipxe-src.patch
     ./0000-fix-install-python.patch
-    ./0004-makefile-use-efi-ld.patch
     ./0005-makefile-fix-efi-mountdir-use.patch
   ] ++ (config.patches or []);
 
   postPatch = ''
     ### Hacks
-
-    # Work around a bug in our GCC wrapper: `gcc -MF foo -v' doesn't
-    # print the GCC version number properly.
-    substituteInPlace xen/Makefile \
-      --replace '$(CC) $(CFLAGS) -v' '$(CC) -v'
 
     # Hack to get `gcc -m32' to work without having 32-bit Glibc headers.
     mkdir -p tools/include/gnu
@@ -152,22 +146,12 @@ stdenv.mkDerivation (rec {
 
     ### Fixing everything else
 
-    substituteInPlace tools/libfsimage/common/fsimage_plugin.c \
-      --replace /usr $out
-
-    substituteInPlace tools/blktap2/lvm/lvm-util.c \
-      --replace /usr/sbin/vgs ${lvm2}/bin/vgs \
-      --replace /usr/sbin/lvs ${lvm2}/bin/lvs
-
     substituteInPlace tools/misc/xenpvnetboot \
       --replace /usr/sbin/mount ${utillinux}/bin/mount \
       --replace /usr/sbin/umount ${utillinux}/bin/umount
 
     substituteInPlace tools/xenmon/xenmon.py \
       --replace /usr/bin/pkill ${procps}/bin/pkill
-
-    substituteInPlace tools/xenstat/Makefile \
-      --replace /usr/include/curses.h ${ncurses.dev}/include/curses.h
 
     ${optionalString (builtins.compareVersions config.version "4.8" >= 0) ''
       substituteInPlace tools/hotplug/Linux/launch-xenstore.in \

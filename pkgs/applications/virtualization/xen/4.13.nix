@@ -12,8 +12,6 @@
 # qemu
 , udev, pciutils, xorg, SDL, pixman, acl, glusterfs, spice-protocol, usbredir
 , alsaLib, glib, python2
-
-, lvm2, ncurses
 , ... } @ args:
 
 assert withInternalSeabios -> !withSeabios;
@@ -35,11 +33,11 @@ let
 in
 
 callPackage (import ./generic.nix (rec {
-  version = "4.10.4";
+  version = "4.13.0";
 
   src = fetchurl {
     url = "https://downloads.xenproject.org/release/xen/${version}/xen-${version}.tar.gz";
-    sha256 = "0ipkr7b3v3y183n6nfmz7q3gnzxa20011df4jpvxi6pmr8cpnkwh";
+    sha256 = "1zhakhrx9chnsjr0g29wz5bbq652qvy4i941599jbbyy5ldy56n6";
   };
 
   # Sources needed to build tools and firmwares.
@@ -50,7 +48,7 @@ callPackage (import ./generic.nix (rec {
         # rev = "refs/tags/qemu-xen-${version}";
         # use revision hash - reproducible but must be updated with each new version
         rev = "qemu-xen-${version}";
-        sha256 = "0laxvhdjz1njxjvq3jzw2yqvdr9gdn188kqjf2gcrfzgih7xv2ym";
+        sha256 = "1pcpdqr2vsm73xr54i902sh36fdly83fawf8ylxny0n2vs45dlb2";
       };
       buildInputs = qemuDeps;
       postPatch = ''
@@ -66,8 +64,8 @@ callPackage (import ./generic.nix (rec {
         url = https://xenbits.xen.org/git-http/qemu-xen-traditional.git;
         # rev = "refs/tags/xen-${version}";
         # use revision hash - reproducible but must be updated with each new version
-        rev = "c8ea0457495342c417c3dc033bba25148b279f60";
-        sha256 = "0v5nl3c08kpjg57fb8l191h1y57ykp786kz6l525jgplif28vx13";
+        rev = "xen-${version}";
+        sha256 = "01akka7q8f84zm1rjb9vbls6xw9j288svgxpbidaa6mf1nk3nrsb";
       };
       buildInputs = qemuDeps;
       patches = [
@@ -220,77 +218,14 @@ callPackage (import ./generic.nix (rec {
     "-Wno-error=absolute-value"
   ];
 
-  # NOTE: 4.10.4 has XSAs up to XSA-297 applied, excepting XSA-289 which was
-  # excluded from 4.10.4 and later Xen versions, with the below reasons:
-  #
-  # These patches are intended by their authors to mitigate these
-  # vulnerabilities. In some form they are likely to be included in future
-  # Xen releases. We very much welcome this contribution to the Xen
-  # community's response to Spectre/L1TF.
-  #
-  # However:
-  #
-  #  * These patches have not been validated by the Xen Project
-  #    Security Team.  Work is ongoing.
-
-  #  * We expect that there may be other exploitable code patterns and
-  #    gadgets, similar to but beyond those disclosed here.
-
-  #  * Should further such exploitable code patterns be discovered, we
-  #    will not necessarily issue a further advisory, or update this
-  #    advisory.  Instead, we would usually recommend that any
-  #    improvements to reduce the exploitability be handled in public, in
-  #    accordance with the public status of the underlying vulnerabilities
-  #    XSA-273 and XSA-254.
-
-  #  * We therefore do not recommend responding to this advisory by
-  #    applying these patches.  Instead, we recommend using hardware
-  #    without this bug, or failing that, disabling hyperthreading (SMT)
-  #    as discussed in XSA-273.
   patches = with xsa; flatten [
-    ./0004-4.10-makefile-use-efi-ld.patch
-    XSA_298_410
-    XSA_299_410
-    XSA_301_411
-    XSA_302_410
-    XSA_304_410
-    XSA_305_410
-    XSA_306_411
-    XSA_307
-    XSA_308
-    XSA_309
-    XSA_310
-    XSA_311_410
-    XSA_312_411
+    ./0004-4.13-makefile-use-efi-ld.patch
+    XSA_312
   ];
-
   postPatch = ''
-    # Avoid a glibc >= 2.25 deprecation warnings that get fatal via -Werror.
-    sed 1i'#include <sys/sysmacros.h>' \
-      -i tools/blktap2/control/tap-ctl-allocate.c \
-      -i tools/libxl/libxl_device.c
     # Makefile didn't include previous PKG_CONFIG_PATH so glib wasn't found
     substituteInPlace tools/Makefile \
       --replace 'PKG_CONFIG_PATH=$(XEN_ROOT)/tools/pkg-config' 'PKG_CONFIG_PATH=$(XEN_ROOT)/tools/pkg-config:$(PKG_CONFIG_PATH)'
-
-    ### Hacks
-
-    # Work around a bug in our GCC wrapper: `gcc -MF foo -v' doesn't
-    # print the GCC version number properly.
-    substituteInPlace xen/Makefile \
-      --replace '$(CC) $(CFLAGS) -v' '$(CC) -v'
-
-    ### Fixing everything else
-
-    substituteInPlace tools/libfsimage/common/fsimage_plugin.c \
-      --replace /usr $out
-
-    substituteInPlace tools/blktap2/lvm/lvm-util.c \
-      --replace /usr/sbin/vgs ${lvm2}/bin/vgs \
-      --replace /usr/sbin/lvs ${lvm2}/bin/lvs
-
-    substituteInPlace tools/xenstat/Makefile \
-      --replace /usr/include/curses.h ${ncurses.dev}/include/curses.h
   '';
 
   passthru = {
