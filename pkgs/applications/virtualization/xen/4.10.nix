@@ -26,12 +26,6 @@ with stdenv.lib;
 let
   xsa = import ./xsa-patches.nix { inherit fetchpatch; };
 
-  qemuMemfdBuildFix = fetchpatch {
-    name = "xen-4.8-memfd-build-fix.patch";
-    url = https://github.com/qemu/qemu/commit/75e5b70e6b5dcc4f2219992d7cffa462aa406af0.patch;
-    sha256 = "0gaz93kb33qc0jx6iphvny0yrd17i8zhcl3a9ky5ylc2idz0wiwa";
-  };
-
   qemuDeps = [
     udev pciutils xorg.libX11 SDL pixman acl glusterfs spice-protocol usbredir
     alsaLib glib python2
@@ -222,6 +216,49 @@ callPackage (import ./generic.nix (rec {
     "-Wno-error=address-of-packed-member"
     "-Wno-error=format-overflow"
     "-Wno-error=absolute-value"
+  ];
+
+  # NOTE: 4.10.4 has XSAs up to XSA-297 applied, excepting XSA-289 which was
+  # excluded from 4.10.4 and later Xen versions, with the below reasons:
+  #
+  # These patches are intended by their authors to mitigate these
+  # vulnerabilities. In some form they are likely to be included in future
+  # Xen releases. We very much welcome this contribution to the Xen
+  # community's response to Spectre/L1TF.
+  #
+  # However:
+  #
+  #  * These patches have not been validated by the Xen Project
+  #    Security Team.  Work is ongoing.
+
+  #  * We expect that there may be other exploitable code patterns and
+  #    gadgets, similar to but beyond those disclosed here.
+
+  #  * Should further such exploitable code patterns be discovered, we
+  #    will not necessarily issue a further advisory, or update this
+  #    advisory.  Instead, we would usually recommend that any
+  #    improvements to reduce the exploitability be handled in public, in
+  #    accordance with the public status of the underlying vulnerabilities
+  #    XSA-273 and XSA-254.
+
+  #  * We therefore do not recommend responding to this advisory by
+  #    applying these patches.  Instead, we recommend using hardware
+  #    without this bug, or failing that, disabling hyperthreading (SMT)
+  #    as discussed in XSA-273.
+  patches = with xsa; flatten [
+    XSA_298_410
+    XSA_299_410
+    XSA_301_411
+    XSA_302_410
+    XSA_304_410
+    XSA_305_410
+    XSA_306_411
+    XSA_307
+    XSA_308
+    XSA_309
+    XSA_310
+    XSA_311_410
+    XSA_312_411
   ];
 
   postPatch = ''
