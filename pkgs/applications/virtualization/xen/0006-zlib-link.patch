@@ -1,0 +1,24 @@
+diff -Naur zlib-1.2.3-orig/Makefile zlib-1.2.3-patched/Makefile
+--- zlib-1.2.3-orig/Makefile	2005-07-18 12:25:21.000000000 +1000
++++ zlib-1.2.3-patched/Makefile	2020-03-12 14:32:16.398888946 +1100
+@@ -68,7 +68,7 @@
+ 	fi
+ 
+ libz.a: $(OBJS) $(OBJA)
+-	$(AR) $@ $(OBJS) $(OBJA)
++	$(AR) rc $@ $(OBJS) $(OBJA)
+ 	-@ ($(RANLIB) $@ || true) >/dev/null 2>&1
+ 
+ match.o: match.S
+diff -Naur zlib-1.2.3-orig/Makefile.in zlib-1.2.3-patched/Makefile.in
+--- zlib-1.2.3-orig/Makefile.in	2005-07-18 12:25:21.000000000 +1000
++++ zlib-1.2.3-patched/Makefile.in	2020-03-12 14:32:09.405976703 +1100
+@@ -68,7 +68,7 @@
+ 	fi
+ 
+ libz.a: $(OBJS) $(OBJA)
+-	$(AR) $@ $(OBJS) $(OBJA)
++	$(AR) rc $@ $(OBJS) $(OBJA)
+ 	-@ ($(RANLIB) $@ || true) >/dev/null 2>&1
+ 
+ match.o: match.S

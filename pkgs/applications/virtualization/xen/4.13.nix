@@ -7,10 +7,11 @@
 , withInternalOVMF ? false # FIXME: tricky to build
 , withOVMF ? false, OVMF
 , withLibHVM ? true
+, withStubdom ? true
 
 # qemu
 , udev, pciutils, xorg, SDL, pixman, acl, glusterfs, spice-protocol, usbredir
-, alsaLib
+, alsaLib, glib, python2
 , ... } @ args:
 
 assert withInternalSeabios -> !withSeabios;
@@ -25,41 +26,18 @@ with stdenv.lib;
 let
   xsa = import ./xsa-patches.nix { inherit fetchpatch; };
 
-  xenlockprofpatch = (fetchpatch {
-    name = "xenlockprof-gcc7.patch";
-    url = "https://xenbits.xen.org/gitweb/?p=xen.git;a=patch;h=f49fa658b53580cf2ad354d2bf1796766cc11222";
-    sha256 = "1lvzfvkqirknivm8q4cg5byfqz49s16zjk65fkwl3kwb03chky70";
-  });
-
-  xenpmdpatch = (fetchpatch {
-    name = "xenpmd-gcc7.patch";
-    url = "https://xenbits.xen.org/gitweb/?p=xen.git;a=patch;h=2d78f78a14528752266982473c07118f1bc336e3";
-    sha256 = "1ki295pymbcfc64sjb9wqfwpv19p8vwgmnxankada3vm4fxg2rhq";
-  });
-
-  qemuMemfdBuildFix = fetchpatch {
-    name = "xen-4.8-memfd-build-fix.patch";
-    url = https://github.com/qemu/qemu/commit/75e5b70e6b5dcc4f2219992d7cffa462aa406af0.patch;
-    sha256 = "0gaz93kb33qc0jx6iphvny0yrd17i8zhcl3a9ky5ylc2idz0wiwa";
-  };
-
-  # Ported from
-  #"https://xenbits.xen.org/gitweb/?p=qemu-xen.git;a=patch;h=e014dbe74e0484188164c61ff6843f8a04a8cb9d";
-  #"https://xenbits.xen.org/gitweb/?p=qemu-xen.git;a=patch;h=0e3b891fefacc0e49f3c8ffa3a753b69eb7214d2";
-  qemuGlusterfs6Fix = ./qemu-gluster-6-compat.diff;
-
   qemuDeps = [
     udev pciutils xorg.libX11 SDL pixman acl glusterfs spice-protocol usbredir
-    alsaLib
+    alsaLib glib python2
   ];
 in
 
 callPackage (import ./generic.nix (rec {
-  version = "4.8.5";
+  version = "4.13.0";
 
   src = fetchurl {
     url = "https://downloads.xenproject.org/release/xen/${version}/xen-${version}.tar.gz";
-    sha256 = "04xcf01jad1lpqnmjblzhnjzp0bss9fjd9awgcycjx679arbaxqz";
+    sha256 = "1zhakhrx9chnsjr0g29wz5bbq652qvy4i941599jbbyy5ldy56n6";
   };
 
   # Sources needed to build tools and firmwares.
@@ -67,22 +45,27 @@ callPackage (import ./generic.nix (rec {
     qemu-xen = {
       src = fetchgit {
         url = https://xenbits.xen.org/git-http/qemu-xen.git;
-        rev = "refs/tags/qemu-xen-${version}";
-        sha256 = "0lb7zd5nvr6znx47z93nbq4gj8xfb3622s8r2cvmpqmwnmlc3nd4";
+        # rev = "refs/tags/qemu-xen-${version}";
+        # use revision hash - reproducible but must be updated with each new version
+        rev = "qemu-xen-${version}";
+        sha256 = "1pcpdqr2vsm73xr54i902sh36fdly83fawf8ylxny0n2vs45dlb2";
       };
-      patches = [
-        qemuMemfdBuildFix
-        qemuGlusterfs6Fix
-      ];
       buildInputs = qemuDeps;
+      postPatch = ''
+        # needed in build but /usr/bin/env is not available in sandbox
+        substituteInPlace scripts/tracetool.py \
+          --replace "/usr/bin/env python" "${python2}/bin/python"
+      '';
       meta.description = "Xen's fork of upstream Qemu";
     };
   } // optionalAttrs withInternalTraditionalQemu {
     qemu-xen-traditional = {
       src = fetchgit {
         url = https://xenbits.xen.org/git-http/qemu-xen-traditional.git;
-        rev = "refs/tags/xen-${version}";
-        sha256 = "0mryap5y53r09m7qc0b821f717ghwm654r8c3ik1w7adzxr0l5qk";
+        # rev = "refs/tags/xen-${version}";
+        # use revision hash - reproducible but must be updated with each new version
+        rev = "xen-${version}";
+        sha256 = "01akka7q8f84zm1rjb9vbls6xw9j288svgxpbidaa6mf1nk3nrsb";
       };
       buildInputs = qemuDeps;
       patches = [
@@ -147,6 +130,67 @@ callPackage (import ./generic.nix (rec {
         license = licenses.bsd2;
       };
     };
+  } // optionalAttrs withStubdom {
+    "../stubdom/newlib-1.16.0.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/newlib-1.16.0.tar.gz";
+        sha256 = "01rxk9js833mwadq92jx0flvk9jyjrnwrq93j39c2j2wjsa66hnv";
+      };
+    };
+    "../stubdom/zlib-1.2.3.tar.gz" = {
+      src = stdenv.mkDerivation {
+        name = "zlib-patched.tar.gz";
+        patches = [
+          ./0006-zlib-link.patch
+        ];
+        src = fetchurl {
+          url = "https://xenbits.xen.org/xen-extfiles/zlib-1.2.3.tar.gz";
+          sha256 = "0pmh8kifb6sfkqfxc23wqp3f2wzk69sl80yz7w8p8cd4cz8cg58p";
+        };
+        configurePhase = ":";
+        buildPhase = ":";
+        installPhase = ''
+          cd ..
+          tar cvzf $out zlib-1.2.3
+        '';
+      };
+    };
+    "../stubdom/polarssl-1.1.4-gpl.tgz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/polarssl-1.1.4-gpl.tgz";
+        sha256 = "1dl4fprpwagv9akwqpb62qwqvh24i50znadxwvd2kfnhl02gsa9d";
+      };
+    };
+    "../stubdom/lwip-1.3.0.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/lwip-1.3.0.tar.gz";
+        sha256 = "13wlr85s1hnvia6a698qpryyy12lvmqw0a05xmjnd0h71ralsbkp";
+      };
+    };
+    "../stubdom/grub-0.97.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/grub-0.97.tar.gz";
+        sha256 = "02r6b52r0nsp6ryqfiqchnl7r1d9smm80sqx24494gmx5p8ia7af";
+      };
+    };
+    "../stubdom/pciutils-2.2.9.tar.bz2" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/pciutils-2.2.9.tar.bz2";
+        sha256 = "092v4q478i1gc7f3s2wz6p4xlf1wb4gs5shbkn21vnnmzcffc2pn";
+      };
+    };
+    "../stubdom/tpm_emulator-0.7.4.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/tpm_emulator-0.7.4.tar.gz";
+        sha256 = "0nd4vs48j0zfzv1g5jymakxbjqf9ss6b2jph3b64356xhc6ylj2f";
+      };
+    };
+    "../stubdom/gmp-4.3.2.tar.bz2" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/gmp-4.3.2.tar.bz2";
+        sha256 = "0x8prpqi9amfcmi7r4zrza609ai9529pjaq0h4aw51i867064qck";
+      };
+    };
   };
 
   configureFlags = []
@@ -160,39 +204,34 @@ callPackage (import ./generic.nix (rec {
     ++ optional (withOVMF) "--with-system-ovmf=${OVMF.fd}/FV/OVMF.fd"
     ++ optional (withInternalOVMF) "--enable-ovmf";
 
-  patches = with xsa; flatten [
-    # 253: 4.8 not affected
-    # 254: no patch supplied by xen project (Meltdown/Spectre)
-    xenlockprofpatch
-    xenpmdpatch
-  ];
-
   NIX_CFLAGS_COMPILE = toString [
-    # Fix build on Glibc 2.24
+    # Fix build on Glibc 2.24.
     "-Wno-error=deprecated-declarations"
-    # Fix build with GCC8
+    # Fix build with GCC 8
     "-Wno-error=maybe-uninitialized"
     "-Wno-error=stringop-truncation"
     "-Wno-error=format-truncation"
     "-Wno-error=array-bounds"
-    # Fix build with GCC9
+    # Fix build with GCC 9
     "-Wno-error=address-of-packed-member"
     "-Wno-error=format-overflow"
     "-Wno-error=absolute-value"
   ];
 
+  patches = with xsa; flatten [
+    ./0004-4.13-makefile-use-efi-ld.patch
+    XSA_312
+  ];
   postPatch = ''
-    # Avoid a glibc >= 2.25 deprecation warnings that get fatal via -Werror.
-    sed 1i'#include <sys/sysmacros.h>' \
-      -i tools/blktap2/control/tap-ctl-allocate.c \
-      -i tools/libxl/libxl_device.c \
-      ${optionalString withInternalQemu "-i tools/qemu-xen/hw/9pfs/9p.c"}
-
-    sed -i -e '/sys\/sysctl\.h/d' tools/blktap2/drivers/block-remus.c
+    # Makefile didn't include previous PKG_CONFIG_PATH so glib wasn't found
+    substituteInPlace tools/Makefile \
+      --replace 'PKG_CONFIG_PATH=$(XEN_ROOT)/tools/pkg-config' 'PKG_CONFIG_PATH=$(XEN_ROOT)/tools/pkg-config:$(PKG_CONFIG_PATH)'
   '';
 
-  passthru.qemu-system-i386 = if withInternalQemu
+  passthru = {
+    qemu-system-i386 = if withInternalQemu
       then "lib/xen/bin/qemu-system-i386"
       else throw "this xen has no qemu builtin";
+  };
 
 })) ({ ocamlPackages = ocaml-ng.ocamlPackages_4_05; } // args)

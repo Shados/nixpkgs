@@ -7,10 +7,13 @@
 , withInternalOVMF ? false # FIXME: tricky to build
 , withOVMF ? false, OVMF
 , withLibHVM ? true
+, withStubdom ? true
 
 # qemu
 , udev, pciutils, xorg, SDL, pixman, acl, glusterfs, spice-protocol, usbredir
 , alsaLib, glib, python2
+
+, lvm2, ncurses
 , ... } @ args:
 
 assert withInternalSeabios -> !withSeabios;
@@ -24,12 +27,6 @@ with stdenv.lib;
 
 let
   xsa = import ./xsa-patches.nix { inherit fetchpatch; };
-
-  qemuMemfdBuildFix = fetchpatch {
-    name = "xen-4.8-memfd-build-fix.patch";
-    url = https://github.com/qemu/qemu/commit/75e5b70e6b5dcc4f2219992d7cffa462aa406af0.patch;
-    sha256 = "0gaz93kb33qc0jx6iphvny0yrd17i8zhcl3a9ky5ylc2idz0wiwa";
-  };
 
   qemuDeps = [
     udev pciutils xorg.libX11 SDL pixman acl glusterfs spice-protocol usbredir
@@ -135,6 +132,67 @@ callPackage (import ./generic.nix (rec {
         license = licenses.bsd2;
       };
     };
+  } // optionalAttrs withStubdom {
+    "../stubdom/newlib-1.16.0.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/newlib-1.16.0.tar.gz";
+        sha256 = "01rxk9js833mwadq92jx0flvk9jyjrnwrq93j39c2j2wjsa66hnv";
+      };
+    };
+    "../stubdom/zlib-1.2.3.tar.gz" = {
+      src = stdenv.mkDerivation {
+        name = "zlib-patched.tar.gz";
+        patches = [
+          ./0006-zlib-link.patch
+        ];
+        src = fetchurl {
+          url = "https://xenbits.xen.org/xen-extfiles/zlib-1.2.3.tar.gz";
+          sha256 = "0pmh8kifb6sfkqfxc23wqp3f2wzk69sl80yz7w8p8cd4cz8cg58p";
+        };
+        configurePhase = ":";
+        buildPhase = ":";
+        installPhase = ''
+          cd ..
+          tar cvzf $out zlib-1.2.3
+        '';
+      };
+    };
+    "../stubdom/polarssl-1.1.4-gpl.tgz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/polarssl-1.1.4-gpl.tgz";
+        sha256 = "1dl4fprpwagv9akwqpb62qwqvh24i50znadxwvd2kfnhl02gsa9d";
+      };
+    };
+    "../stubdom/lwip-1.3.0.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/lwip-1.3.0.tar.gz";
+        sha256 = "13wlr85s1hnvia6a698qpryyy12lvmqw0a05xmjnd0h71ralsbkp";
+      };
+    };
+    "../stubdom/grub-0.97.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/grub-0.97.tar.gz";
+        sha256 = "02r6b52r0nsp6ryqfiqchnl7r1d9smm80sqx24494gmx5p8ia7af";
+      };
+    };
+    "../stubdom/pciutils-2.2.9.tar.bz2" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/pciutils-2.2.9.tar.bz2";
+        sha256 = "092v4q478i1gc7f3s2wz6p4xlf1wb4gs5shbkn21vnnmzcffc2pn";
+      };
+    };
+    "../stubdom/tpm_emulator-0.7.4.tar.gz" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/tpm_emulator-0.7.4.tar.gz";
+        sha256 = "0nd4vs48j0zfzv1g5jymakxbjqf9ss6b2jph3b64356xhc6ylj2f";
+      };
+    };
+    "../stubdom/gmp-4.3.2.tar.bz2" = {
+      src = fetchurl {
+        url = "https://xenbits.xen.org/xen-extfiles/gmp-4.3.2.tar.bz2";
+        sha256 = "0x8prpqi9amfcmi7r4zrza609ai9529pjaq0h4aw51i867064qck";
+      };
+    };
   };
 
   configureFlags = []
@@ -162,6 +220,50 @@ callPackage (import ./generic.nix (rec {
     "-Wno-error=absolute-value"
   ];
 
+  # NOTE: 4.10.4 has XSAs up to XSA-297 applied, excepting XSA-289 which was
+  # excluded from 4.10.4 and later Xen versions, with the below reasons:
+  #
+  # These patches are intended by their authors to mitigate these
+  # vulnerabilities. In some form they are likely to be included in future
+  # Xen releases. We very much welcome this contribution to the Xen
+  # community's response to Spectre/L1TF.
+  #
+  # However:
+  #
+  #  * These patches have not been validated by the Xen Project
+  #    Security Team.  Work is ongoing.
+
+  #  * We expect that there may be other exploitable code patterns and
+  #    gadgets, similar to but beyond those disclosed here.
+
+  #  * Should further such exploitable code patterns be discovered, we
+  #    will not necessarily issue a further advisory, or update this
+  #    advisory.  Instead, we would usually recommend that any
+  #    improvements to reduce the exploitability be handled in public, in
+  #    accordance with the public status of the underlying vulnerabilities
+  #    XSA-273 and XSA-254.
+
+  #  * We therefore do not recommend responding to this advisory by
+  #    applying these patches.  Instead, we recommend using hardware
+  #    without this bug, or failing that, disabling hyperthreading (SMT)
+  #    as discussed in XSA-273.
+  patches = with xsa; flatten [
+    ./0004-4.10-makefile-use-efi-ld.patch
+    XSA_298_410
+    XSA_299_410
+    XSA_301_411
+    XSA_302_410
+    XSA_304_410
+    XSA_305_410
+    XSA_306_411
+    XSA_307
+    XSA_308
+    XSA_309
+    XSA_310
+    XSA_311_410
+    XSA_312_411
+  ];
+
   postPatch = ''
     # Avoid a glibc >= 2.25 deprecation warnings that get fatal via -Werror.
     sed 1i'#include <sys/sysmacros.h>' \
@@ -170,6 +272,25 @@ callPackage (import ./generic.nix (rec {
     # Makefile didn't include previous PKG_CONFIG_PATH so glib wasn't found
     substituteInPlace tools/Makefile \
       --replace 'PKG_CONFIG_PATH=$(XEN_ROOT)/tools/pkg-config' 'PKG_CONFIG_PATH=$(XEN_ROOT)/tools/pkg-config:$(PKG_CONFIG_PATH)'
+
+    ### Hacks
+
+    # Work around a bug in our GCC wrapper: `gcc -MF foo -v' doesn't
+    # print the GCC version number properly.
+    substituteInPlace xen/Makefile \
+      --replace '$(CC) $(CFLAGS) -v' '$(CC) -v'
+
+    ### Fixing everything else
+
+    substituteInPlace tools/libfsimage/common/fsimage_plugin.c \
+      --replace /usr $out
+
+    substituteInPlace tools/blktap2/lvm/lvm-util.c \
+      --replace /usr/sbin/vgs ${lvm2}/bin/vgs \
+      --replace /usr/sbin/lvs ${lvm2}/bin/lvs
+
+    substituteInPlace tools/xenstat/Makefile \
+      --replace /usr/include/curses.h ${ncurses.dev}/include/curses.h
   '';
 
   passthru = {

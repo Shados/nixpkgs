@@ -10,15 +10,18 @@ config:
 
 # Xen Optional
 , ocamlPackages
+, withStubdom ? true
 
 # Scripts
 , coreutils, gawk, gnused, gnugrep, diffutils, multipath-tools
 , iproute, inetutils, iptables, bridge-utils, openvswitch, nbd, drbd
-, lvm2, utillinux, procps, systemd
+, utillinux, procps, systemd
 
 # Documentation
 # python2Packages.markdown
 , transfig, ghostscript, texinfo, pandoc
+
+, binutils-unwrapped
 
 , ...} @ args:
 
@@ -42,6 +45,17 @@ let
     }
     ( __do )
   '');
+
+  # We don't want to use the wrapped version, because this version of ld is
+  # only used for linking the Xen EFI binary, and the build process really
+  # needs control over the LDFLAGS used
+  efiBinutils = binutils-unwrapped.overrideAttrs (oldAttrs: {
+    name = "efi-binutils";
+    configureFlags = oldAttrs.configureFlags ++ [
+      "--enable-targets=x86_64-pep"
+    ];
+    doInstallCheck = false; # We get a spurious failure otherwise, due to host/target mis-match
+  });
 in
 
 stdenv.mkDerivation (rec {
@@ -76,31 +90,6 @@ stdenv.mkDerivation (rec {
 
   prePatch = ''
     ### Generic fixes
-
-    # Xen's stubdoms, tools and firmwares need various sources that
-    # are usually fetched at build time using wget and git. We can't
-    # have that, so we prefetch them in nix-expression and setup
-    # fake wget and git for debugging purposes.
-
-    mkdir fake-bin
-
-    # Fake git: just print what it wants and die
-    cat > fake-bin/wget << EOF
-    #!${stdenv.shell} -e
-    echo ===== FAKE WGET: Not fetching \$*
-    [ -e \$3 ]
-    EOF
-
-    # Fake git: just print what it wants and die
-    cat > fake-bin/git << EOF
-    #!${stdenv.shell}
-    echo ===== FAKE GIT: Not cloning \$*
-    [ -e \$3 ]
-    EOF
-
-    chmod +x fake-bin/*
-    export PATH=$PATH:$PWD/fake-bin
-
     # Remove in-tree qemu stuff in case we build from a tar-ball
     rm -rf tools/qemu-xen tools/qemu-xen-traditional
 
@@ -111,6 +100,29 @@ stdenv.mkDerivation (rec {
     find . -type f -not -path "./tools/hotplug/Linux/xendomains.in" \
       | xargs sed -i 's@/bin/bash@${stdenv.shell}@g'
 
+    # Xen's stubdoms, tools and firmwares need various sources that
+    # are usually fetched at build time using wget and git. We can't
+    # have that, so we prefetch them in nix-expression and setup
+    # fake wget and git for debugging purposes. These have to be created
+    # *after* the above shebang patching.
+
+    mkdir fake-bin
+    # Fake wget: just print what it wants and die, if missing
+    cat > fake-bin/wget << EOF
+    #!${stdenv.shell} -e
+    echo ===== FAKE WGET: Not fetching \$* in $PWD
+    [ -e \$3 ]
+    EOF
+    # Fake git: just print what it wants and die, if missing
+    cat > fake-bin/git << EOF
+    #!${stdenv.shell}
+    echo ===== FAKE GIT: Not cloning \$* in $PWD
+    [ -e \$3 ]
+    EOF
+
+    chmod +x fake-bin/*
+    export PATH=$PATH:$PWD/fake-bin
+
     # Get prefetched stuff
     ${withXenfiles (name: x: ''
       echo "${x.src} -> tools/${name}"
@@ -119,18 +131,14 @@ stdenv.mkDerivation (rec {
     '')}
   '';
 
-  patches = [ ./0000-fix-ipxe-src.patch
-              ./0000-fix-install-python.patch
-            ] ++ optional (versionOlder version "4.8.5") ./acpica-utils-20180427.patch
-            ++ (config.patches or []);
+  patches = [
+    ./0000-fix-ipxe-src.patch
+    ./0000-fix-install-python.patch
+    ./0005-makefile-fix-efi-mountdir-use.patch
+  ] ++ (config.patches or []);
 
   postPatch = ''
     ### Hacks
-
-    # Work around a bug in our GCC wrapper: `gcc -MF foo -v' doesn't
-    # print the GCC version number properly.
-    substituteInPlace xen/Makefile \
-      --replace '$(CC) $(CFLAGS) -v' '$(CC) -v'
 
     # Hack to get `gcc -m32' to work without having 32-bit Glibc headers.
     mkdir -p tools/include/gnu
@@ -138,22 +146,12 @@ stdenv.mkDerivation (rec {
 
     ### Fixing everything else
 
-    substituteInPlace tools/libfsimage/common/fsimage_plugin.c \
-      --replace /usr $out
-
-    substituteInPlace tools/blktap2/lvm/lvm-util.c \
-      --replace /usr/sbin/vgs ${lvm2}/bin/vgs \
-      --replace /usr/sbin/lvs ${lvm2}/bin/lvs
-
     substituteInPlace tools/misc/xenpvnetboot \
       --replace /usr/sbin/mount ${utillinux}/bin/mount \
       --replace /usr/sbin/umount ${utillinux}/bin/umount
 
     substituteInPlace tools/xenmon/xenmon.py \
       --replace /usr/bin/pkill ${procps}/bin/pkill
-
-    substituteInPlace tools/xenstat/Makefile \
-      --replace /usr/include/curses.h ${ncurses.dev}/include/curses.h
 
     ${optionalString (builtins.compareVersions config.version "4.8" >= 0) ''
       substituteInPlace tools/hotplug/Linux/launch-xenstore.in \
@@ -186,12 +184,15 @@ stdenv.mkDerivation (rec {
       --replace /bin/ls ls
   '';
 
+  EFI_LD = "${efiBinutils}/bin/ld";
+  EFI_VENDOR = "nixos";
+
   # TODO: Flask needs more testing before enabling it by default.
   #makeFlags = [ "XSM_ENABLE=y" "FLASK_ENABLE=y" "PREFIX=$(out)" "CONFIG_DIR=/etc" "XEN_EXTFILES_URL=\\$(XEN_ROOT)/xen_ext_files" ];
   makeFlags = [ "PREFIX=$(out) CONFIG_DIR=/etc" "XEN_SCRIPT_DIR=/etc/xen/scripts" ]
            ++ (config.makeFlags or []);
 
-  buildFlags = [ "xen" "tools" ];
+  buildFlags = [ "xen" "tools" ] ++ optional withStubdom "stubdom";
 
   postBuild = ''
     make -C docs man-pages
